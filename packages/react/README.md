@@ -8,6 +8,10 @@ A React server component to render markdown content.
 npm install @marksmith/react
 ```
 
+> [!NOTE]  
+> This package is **not available on npm yet**. There is already another package with a similar name, `mark-smith`, which prevents publishing as `marksmith`. I'm currently brainstorming another name.
+
+
 ## Usage
 
 ```tsx

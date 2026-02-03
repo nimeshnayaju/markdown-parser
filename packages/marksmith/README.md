@@ -8,6 +8,10 @@ A markdown parser with streaming support, suitable for incrementally parsing LLM
 npm install marksmith
 ```
 
+> [!NOTE]  
+> This package is **not available on npm yet**. There is already another package with a similar name, `mark-smith`, which prevents publishing as `marksmith`. I'm currently brainstorming another name.
+
+
 ## Usage
 
 ```typescript
