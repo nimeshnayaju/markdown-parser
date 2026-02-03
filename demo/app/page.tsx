@@ -1,4 +1,4 @@
-import { Markdown } from "@marksmith/react";
+import { Markdown } from "markings-react";
 
 export default function Home() {
 	return (

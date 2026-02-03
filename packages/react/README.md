@@ -1,21 +1,17 @@
-# `@marksmith/react`
+# `markings-react`
 
 A React server component to render markdown content.
 
 ## Installation
 
 ```bash
-npm install @marksmith/react
+npm install markings-react
 ```
-
-> [!NOTE]  
-> This package is **not available on npm yet**. There is already another package with a similar name, `mark-smith`, which prevents publishing as `marksmith`. I'm currently brainstorming another name.
-
 
 ## Usage
 
 ```tsx
-import { Markdown } from "@marksmith/react";
+import { Markdown } from "markings-react";
 
 export function Article({ content }: { content: string }) {
 	return (
@@ -30,7 +26,7 @@ It is possible to customize how markdown nodes are rendered by through the `comp
 
 
 ```tsx
-import { Markdown } from "@marksmith/react";
+import { Markdown } from "markings-react";
 
 export function Article({ content }: { content: string }) {
 	return (

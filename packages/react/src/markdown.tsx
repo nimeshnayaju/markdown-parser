@@ -1,6 +1,6 @@
 import "server-only";
 
-import { type BlockNode, type InlineNode, MarkdownParser } from "marksmith";
+import { type BlockNode, type InlineNode, MarkdownParser } from "markings";
 import type { ComponentType, ReactNode } from "react";
 
 export type MarkdownComponents = BlockNodeComponents & InlineNodeComponents;

@@ -1,7 +1,7 @@
 {
-	"name": "marksmith",
+	"name": "markings",
 	"description": "A streaming-capable markdown parser.",
-	"version": "0.0.1",
+	"version": "0.1.0",
 	"license": "MIT",
 	"type": "module",
 	"sideEffects": false,

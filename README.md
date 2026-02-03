@@ -1,20 +1,17 @@
-# `marksmith`
+# `markings`
 
 A markdown parser with streaming support, suitable for incrementally parsing LLM markdown streams. Parses markdown into a structured fully typed tree of nodes, following the [CommonMark](https://commonmark.org/) specification. It supports streaming/incremental parsing, so you can feed it growing input and emit only the blocks that have become finalized.
 
 ## Installation
 
 ```bash
-npm install marksmith
+npm install markings
 ```
-
-> [!NOTE]  
-> This package is **not available on npm yet**. There is already another package with a similar name, `mark-smith`, which prevents publishing as `marksmith`. I'm currently brainstorming another name.
 
 ## Usage
 
 ```typescript
-import { MarkdownParser } from "marksmith";
+import { MarkdownParser } from "markings";
 
 const parser = new MarkdownParser();
 

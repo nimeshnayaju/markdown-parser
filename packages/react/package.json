@@ -1,7 +1,6 @@
 {
-	"name": "@marksmith/react",
-	"version": "0.0.1",
-	"private": true,
+	"name": "markings-react",
+	"version": "0.1.0",
 	"sideEffects": false,
 	"exports": {
 		".": {
@@ -14,7 +13,7 @@
 		"test": "vitest run"
 	},
 	"dependencies": {
-		"marksmith": "*",
+		"markings": "*",
 		"server-only": "^0.0.1"
 	},
 	"devDependencies": {
