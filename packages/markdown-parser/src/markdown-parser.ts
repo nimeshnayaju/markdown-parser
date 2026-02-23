@@ -16,16 +16,14 @@ export class MarkdownParser {
 		children: [],
 		parent: null,
 	};
-	private nextLineIndex = 0;
 	private nextNodeIndex = 0;
 	private referenceDefinitions: Map<string, { href: string; title?: string }> =
 		new Map();
 	parse(input: string, options?: { stream?: boolean }): BlockNode[] {
 		const stream = options?.stream ?? false;
-		const lines = this.splitter.split(input, { stream });
-		for (const line of lines) {
+
+		for (const line of this.splitter.split(input, { stream })) {
 			this.parseLine(line.replace(/\0/g, "\uFFFD"));
-			this.nextLineIndex++;
 		}
 
 		// If stream is false, we need to finalize all remaining open blocks before returning the nodes.
@@ -51,14 +49,13 @@ export class MarkdownParser {
 	}
 
 	private parseLine(line: string) {
-		const lineIndex = this.nextLineIndex;
-
 		// We start from the root node and descend through the rightmost path of the current node until we find the last open node that the current line continues.
 		let lastMatchedNode:
 			| RootNode_internal
 			| BlockquoteNode_internal
 			| ListItemNode_internal = this.root;
 
+		const lists: ListItemNode_internal[] = []; // Tracks contiguous list items in an empty line
 		while (true) {
 			if (!("children" in lastMatchedNode)) break;
 
@@ -77,8 +74,6 @@ export class MarkdownParser {
 					line = blockquote.content;
 					lastMatchedNode = child;
 
-					child.endLineIndex = lineIndex;
-
 					continue;
 				}
 				// If the current line does not continue the blockquote, we break out of the loop and continue with the current node (i.e., the parent of the blockquote node) as the last matched node.
@@ -93,8 +88,15 @@ export class MarkdownParser {
 
 				if (isLineEmpty(line)) {
 					const lastItemChild = item.children.at(-1);
+
+					lists.push(item);
+
 					// If the current line is empty and there are no children in the list item, we close the list item.
 					if (lastItemChild === undefined) {
+						// Mark all contiguous list items as having a pending blank line
+						for (const list of lists) {
+							list.hasPendingBlankLine = true;
+						}
 						closeRightmostPath(child);
 						return;
 					}
@@ -111,6 +113,7 @@ export class MarkdownParser {
 				if (numOfColumns >= child.numOfColumns) {
 					line = sliceLeadingIndent(line, child.numOfColumns);
 					lastMatchedNode = item;
+
 					continue;
 				}
 				// If the current line is not empty and not indented enough to continue the list item, this line doesn't continue the list item, so we break out of the loop.
@@ -126,13 +129,11 @@ export class MarkdownParser {
 
 				// If the current line closes the fenced code block, we mark the fenced code block as closed and exit as the line has been fully processed and doesn't require any further processing.
 				if (isCodeFenceEnd(line, { marker, numOfMarkers })) {
-					child.endLineIndex = lineIndex;
 					child.isClosed = true;
 					return;
 				}
 				// If the current line does not close the fenced code block, we add the line content to the fenced code block content.
 				else {
-					child.endLineIndex = lineIndex;
 					child.lines.push(sliceLeadingIndent(line, child.indentLevel));
 					return;
 				}
@@ -142,11 +143,9 @@ export class MarkdownParser {
 			if (child.type === "indented-code-block") {
 				// We continue the indented code block if the current line is indented enough or if it's empty.
 				if (isIndentedCodeLine(line)) {
-					child.endLineIndex = lineIndex;
 					child.lines.push(sliceLeadingIndent(line, 4));
 					return;
 				} else if (isLineEmpty(line)) {
-					child.endLineIndex = lineIndex;
 					child.lines.push("");
 					return;
 				}
@@ -160,11 +159,13 @@ export class MarkdownParser {
 			if (child.type === "html-block") {
 				// If the HTML block can be interrupted by a blank line and the current line is empty, we mark the HTML block as closed.
 				if (child.canBeInterruptedByBlankLine && isLineEmpty(line)) {
+					for (const list of lists) {
+						list.hasPendingBlankLine = true;
+					}
 					child.isClosed = true;
 					return;
 				}
 
-				child.endLineIndex = lineIndex;
 				child.lines.push(line);
 
 				// If the HTML block ends with the current line, we mark the HTML block as closed.
@@ -180,6 +181,10 @@ export class MarkdownParser {
 			if (child.type === "paragraph" || child.type === "table") {
 				// If the current line is empty, we mark the paragraph or table node as closed and exit as the line has been fully processed and doesn't require any further processing.
 				if (isLineEmpty(line)) {
+					// If the parent of the paragraph or table node is a list item, we mark it as having a pending blank line.
+					for (const list of lists) {
+						list.hasPendingBlankLine = true;
+					}
 					child.isClosed = true;
 					return;
 				}
@@ -188,6 +193,29 @@ export class MarkdownParser {
 					break;
 				}
 			}
+		}
+
+		// If the last matched node is a list item and it has a pending blank line, we mark the parent list as loose.
+		if (
+			lastMatchedNode.type === "list-item" &&
+			lastMatchedNode.hasPendingBlankLine
+		) {
+			lastMatchedNode.parent.isTight = false;
+			let node:
+				| BlockNode_internal
+				| ListItemNode_internal
+				| RootNode_internal
+				| null = lastMatchedNode;
+			while (node !== null) {
+				if (node.type === "list-item") {
+					node.hasPendingBlankLine = false;
+				}
+				node = node.parent;
+			}
+		}
+
+		for (const list of lists) {
+			list.hasPendingBlankLine = true;
 		}
 
 		// Represents the node where newly matched nodes are expected to be added. This may not always be true for exceptional cases, like paragraph continuation.
@@ -204,8 +232,6 @@ export class MarkdownParser {
 					children: [],
 					isClosed: false,
 					parent: currentContainer,
-					startLineIndex: lineIndex,
-					endLineIndex: lineIndex,
 				};
 				addNode(node);
 
@@ -224,8 +250,6 @@ export class MarkdownParser {
 					content: heading.content,
 					isClosed: true,
 					parent: currentContainer,
-					startLineIndex: lineIndex,
-					endLineIndex: lineIndex,
 				});
 				// Exit from the loop as we've reached a leaf block node
 				break;
@@ -243,8 +267,6 @@ export class MarkdownParser {
 					lines: [],
 					isClosed: false,
 					parent: currentContainer,
-					startLineIndex: lineIndex,
-					endLineIndex: lineIndex,
 				});
 				// Exit from the loop as we've reached a leaf block node
 				break;
@@ -260,8 +282,6 @@ export class MarkdownParser {
 					lines: [line],
 					isClosed: false,
 					parent: currentContainer,
-					startLineIndex: lineIndex,
-					endLineIndex: lineIndex,
 				};
 
 				if (htmlBlock.canInterruptParagraph) {
@@ -311,8 +331,6 @@ export class MarkdownParser {
 						body: { rows: [] },
 						isClosed: false,
 						parent: currentContainer,
-						startLineIndex: lineIndex,
-						endLineIndex: lineIndex,
 					});
 					break;
 				}
@@ -320,19 +338,15 @@ export class MarkdownParser {
 				// Setext heading
 				const heading = parseSetextHeading(line);
 				if (heading !== null) {
-					let lines = lastChild.lines;
-					const originalNumOfLines = lines.length;
-
 					// Parse link reference definitions (if any) from the paragraph lines
-					let definition = parseLinkReferenceDefinition(lines);
-					while (definition !== null) {
-						const { label, href, title } = definition.definition;
+					const result = parseLinkReferenceDefinitions(lastChild.lines);
+					for (const definition of result.definitions) {
+						const { label, href, title } = definition;
 						if (!this.referenceDefinitions.has(label)) {
 							this.referenceDefinitions.set(label, { href, title });
 						}
-						lines = lines.slice(definition.nextLineIndex);
-						definition = parseLinkReferenceDefinition(lines);
 					}
+					const lines = lastChild.lines.slice(result.nextLineIndex);
 
 					// If there are remaining lines after parsing link reference definitions, we create a new heading node with the remaining lines
 					if (lines.length > 0) {
@@ -345,9 +359,6 @@ export class MarkdownParser {
 							content: lines.join("\n").trim(),
 							isClosed: true,
 							parent: currentContainer,
-							startLineIndex:
-								lastChild.startLineIndex - (originalNumOfLines - lines.length),
-							endLineIndex: lineIndex,
 						});
 						break;
 					}
@@ -365,8 +376,6 @@ export class MarkdownParser {
 					type: "thematic-break",
 					isClosed: true,
 					parent: currentContainer,
-					startLineIndex: lineIndex,
-					endLineIndex: lineIndex,
 				});
 				break;
 			}
@@ -381,7 +390,6 @@ export class MarkdownParser {
 						isLineEmpty(list.content) ||
 						(list.kind === "ordered" && list.value !== 1)
 					) {
-						lastChild.endLineIndex = lineIndex;
 						lastChild.lines.push(line);
 						break;
 					}
@@ -406,10 +414,8 @@ export class MarkdownParser {
 							numOfColumns: list.numOfColumns,
 							children: [],
 							isClosed: false,
-							parent: currentContainer,
-							startLineIndex: lineIndex,
-							endLineIndex: lineIndex,
 							isTight: true,
+							parent: currentContainer,
 						};
 						addNode(parent);
 					}
@@ -429,14 +435,17 @@ export class MarkdownParser {
 							marker: list.marker,
 							children: [],
 							isClosed: false,
-							parent: currentContainer,
 							numOfColumns: list.numOfColumns,
-							startLineIndex: lineIndex,
-							endLineIndex: lineIndex,
 							isTight: true,
+							parent: currentContainer,
 						};
 						addNode(parent);
 					}
+				}
+
+				// If the last child of the parent list is marked as having a pending blank line, we mark this list as loose (i.e., not tight)
+				if (parent.children.at(-1)?.hasPendingBlankLine) {
+					parent.isTight = false;
 				}
 
 				parent.numOfColumns = list.numOfColumns;
@@ -445,9 +454,8 @@ export class MarkdownParser {
 					type: "list-item",
 					children: [],
 					isClosed: false,
+					hasPendingBlankLine: false,
 					parent: parent,
-					startLineIndex: lineIndex,
-					endLineIndex: lineIndex,
 				};
 				addNode(item);
 
@@ -468,8 +476,6 @@ export class MarkdownParser {
 					lines: [sliceLeadingIndent(line, 4)],
 					isClosed: false,
 					parent: currentContainer,
-					startLineIndex: lineIndex,
-					endLineIndex: lineIndex,
 				});
 				break;
 			}
@@ -481,7 +487,6 @@ export class MarkdownParser {
 
 			// Table continuation
 			if (lastChild?.type === "table" && !lastChild.isClosed) {
-				lastChild.endLineIndex = lineIndex;
 				const numOfColumns = lastChild.head.cells.length;
 				let cells = parseTableRow(line);
 				if (cells.length > numOfColumns) {
@@ -497,7 +502,6 @@ export class MarkdownParser {
 
 			// Paragraph
 			if (latestOpenNode?.type === "paragraph") {
-				latestOpenNode.endLineIndex = lineIndex;
 				latestOpenNode.lines.push(line);
 				break;
 			} else {
@@ -506,8 +510,6 @@ export class MarkdownParser {
 					lines: [line],
 					isClosed: false,
 					parent: currentContainer,
-					startLineIndex: lineIndex,
-					endLineIndex: lineIndex,
 				});
 				break;
 			}
@@ -525,16 +527,15 @@ export class MarkdownParser {
 			if (!block.isClosed) break;
 
 			if (block.type === "paragraph") {
-				let lines = block.lines;
-				let definition = parseLinkReferenceDefinition(lines);
-				while (definition !== null) {
-					const { label, href, title } = definition.definition;
+				const result = parseLinkReferenceDefinitions(block.lines);
+				for (const definition of result.definitions) {
+					const { label, href, title } = definition;
 					if (!this.referenceDefinitions.has(label)) {
 						this.referenceDefinitions.set(label, { href, title });
 					}
-					lines = lines.slice(definition.nextLineIndex);
-					definition = parseLinkReferenceDefinition(lines);
 				}
+
+				const lines = block.lines.slice(result.nextLineIndex);
 				if (lines.length > 0) {
 					block.lines = lines;
 				} else {
@@ -550,7 +551,6 @@ export class MarkdownParser {
 			}
 		}
 	}
-
 	private convertInternalBlockToPublicBlock(
 		block: BlockNode_internal,
 	): BlockNode {
@@ -668,11 +668,8 @@ export class MarkdownParser {
 }
 
 function addNode(node: BlockNode_internal | ListItemNode_internal): void {
-	// Ensure we don't have any dangling "open" nodes on the last-child chain before inserting a new sibling at this level.
 	closeRightmostPath(node.parent);
-	// Insert the new node as the next child of the parent.
 	if (node.type === "list-item") {
-		// This 'if' condition exists only for TypeScript's type narrowing purposes.
 		node.parent.children.push(node);
 	} else {
 		node.parent.children.push(node);
@@ -696,74 +693,28 @@ function closeRightmostPath(
 		| ListNode_internal
 		| ListItemNode_internal,
 ): void {
-	// Find the deepest open node on the rightmost path of the parent container. Then, we close the node, traverse up the parent chain, closing the parent nodes until we reach the root node.
-	// You'll notice that this is not the most efficient way to do this, because we basically travel to the leaf from the parent and then back up to the parent. But, it is required for list tightness calculation.
-	// We could definitely optimize this by keeping track of the deepest open node from parsing the last line, but that would require a lot of additional state management, which is not worth the complexity for now.
-	let currentNode = getDeepestOpenNodeOnRightmostPath(parent);
+	// Walk down the rightmost/last-child chain and close any still-open nodes until we hit a closed one (or run out).
 
-	while (currentNode !== parent) {
-		if (currentNode === null) break;
+	// Start at the last child of the parent; we'll keep descending into the last child of certain container nodes (e.g., blockquotes).
+	let child = parent.children.at(-1);
+	while (child !== undefined) {
+		// If we've hit a node that is already closed, everything below it on this rightmost chain is assumed to be closed too, so we can stop early.
+		if (child.isClosed) break;
+		child.isClosed = true;
 
-		currentNode.isClosed = true;
-
-		if (currentNode.type === "list") {
-			currentNode.isTight = isListTight(currentNode);
+		// If the child is a container node, we continue descending into the last child of the container node.
+		if (
+			child.type === "blockquote" ||
+			child.type === "list" ||
+			child.type === "list-item"
+		) {
+			child = child.children.at(-1);
 		}
-
-		switch (currentNode.type) {
-			case "blockquote":
-			case "list":
-			case "list-item": {
-				// When closing a container node, we update the start and end line indices based on their first and last child's start and end line indices.
-				const firstChild = currentNode.children.at(0);
-				const lastChild = currentNode.children.at(-1);
-				if (firstChild !== undefined) {
-					currentNode.startLineIndex = Math.min(
-						currentNode.startLineIndex,
-						firstChild.startLineIndex,
-					);
-				}
-				if (lastChild !== undefined) {
-					currentNode.endLineIndex = Math.max(
-						currentNode.endLineIndex,
-						lastChild.endLineIndex,
-					);
-				}
-				break;
-			}
-			default:
-				break;
-		}
-
-		if (currentNode.parent?.type === "root") break;
-		currentNode = currentNode.parent;
-	}
-}
-
-function isListTight(list: ListNode_internal): boolean {
-	// 1) Check if there are gaps between list items
-	const items = list.children;
-	for (let i = 0; i < items.length - 1; i++) {
-		const a = items[i];
-		const b = items[i + 1];
-		if (a === undefined || b === undefined) break;
-		if (a.endLineIndex < b.startLineIndex - 1) {
-			return false;
+		// If the child is a leaf node, we stop descending and break out of the loop.
+		else {
+			break;
 		}
 	}
-	// 2) Check if there are gaps between block children inside each item
-	for (const item of items) {
-		const blocks = item.children;
-		for (let j = 0; j < blocks.length - 1; j++) {
-			const a = blocks[j];
-			const b = blocks[j + 1];
-			if (a === undefined || b === undefined) break;
-			if (a.endLineIndex < b.startLineIndex - 1) {
-				return false;
-			}
-		}
-	}
-	return true;
 }
 
 function getDeepestOpenNodeOnRightmostPath(
@@ -792,18 +743,14 @@ function getDeepestOpenNodeOnRightmostPath(
 	}
 }
 
-type LineRange = {
-	startLineIndex: number;
-	endLineIndex: number;
-};
-type ParagraphNode_internal = LineRange & {
+type ParagraphNode_internal = {
 	type: "paragraph";
 	lines: string[];
 	isClosed: boolean;
 	parent: RootNode_internal | BlockquoteNode_internal | ListItemNode_internal;
 };
 
-type HeadingNode_internal = LineRange & {
+type HeadingNode_internal = {
 	type: "heading";
 	level: 1 | 2 | 3 | 4 | 5 | 6;
 	content: string;
@@ -811,7 +758,7 @@ type HeadingNode_internal = LineRange & {
 	parent: RootNode_internal | BlockquoteNode_internal | ListItemNode_internal;
 };
 
-type FencedCodeBlockNode_internal = LineRange & {
+type FencedCodeBlockNode_internal = {
 	type: "fenced-code-block";
 	indentLevel: number;
 	info?: string;
@@ -822,20 +769,20 @@ type FencedCodeBlockNode_internal = LineRange & {
 	parent: RootNode_internal | BlockquoteNode_internal | ListItemNode_internal;
 };
 
-type IndentedCodeNode_internal = LineRange & {
+type IndentedCodeNode_internal = {
 	type: "indented-code-block";
 	lines: string[];
 	isClosed: boolean;
 	parent: RootNode_internal | BlockquoteNode_internal | ListItemNode_internal;
 };
 
-type ThematicBreakNode_internal = LineRange & {
+type ThematicBreakNode_internal = {
 	type: "thematic-break";
 	isClosed: true;
 	parent: RootNode_internal | BlockquoteNode_internal | ListItemNode_internal;
 };
 
-type HtmlBlockNode_internal = LineRange & {
+type HtmlBlockNode_internal = {
 	type: "html-block";
 	endPattern?: RegExp;
 	canBeInterruptedByBlankLine: boolean;
@@ -844,37 +791,38 @@ type HtmlBlockNode_internal = LineRange & {
 	parent: RootNode_internal | BlockquoteNode_internal | ListItemNode_internal;
 };
 
-type BlockquoteNode_internal = LineRange & {
+type BlockquoteNode_internal = {
 	type: "blockquote";
 	children: Array<BlockNode_internal>;
 	isClosed: boolean;
 	parent: RootNode_internal | BlockquoteNode_internal | ListItemNode_internal;
 };
 
-type ListNode_internal = LineRange & {
+type ListNode_internal = {
 	type: "list";
 	children: Array<ListItemNode_internal>;
 	numOfColumns: number;
 	isClosed: boolean;
-	parent: RootNode_internal | BlockquoteNode_internal | ListItemNode_internal;
 	isTight: boolean;
+	parent: RootNode_internal | BlockquoteNode_internal | ListItemNode_internal;
 } & (
-		| {
-				kind: "ordered";
-				start: number;
-				delimiter: "." | ")";
-		  }
-		| { kind: "unordered"; marker: string }
-	);
+	| {
+			kind: "ordered";
+			start: number;
+			delimiter: "." | ")";
+	  }
+	| { kind: "unordered"; marker: string }
+);
 
-type ListItemNode_internal = LineRange & {
+type ListItemNode_internal = {
 	type: "list-item";
 	children: Array<BlockNode_internal>;
 	isClosed: boolean;
+	hasPendingBlankLine: boolean;
 	parent: ListNode_internal;
 };
 
-type TableNode_internal = LineRange & {
+type TableNode_internal = {
 	type: "table";
 	alignments: Array<"left" | "right" | "center" | undefined>;
 	head: { cells: string[] };
@@ -1516,7 +1464,40 @@ function parseTableRow(line: string): Array<string> {
 	return cells;
 }
 
-function parseLinkReferenceDefinition(lines: string[]): {
+function parseLinkReferenceDefinitions(lines: string[]): {
+	definitions: Array<{
+		label: string;
+		href: string;
+		title?: string;
+	}>;
+	nextLineIndex: number;
+} {
+	const definitions: Array<{
+		label: string;
+		href: string;
+		title?: string;
+	}> = [];
+	let nextLineIndex = 0;
+	let definition = _parseLinkReferenceDefinition(lines, {
+		startLineIndex: nextLineIndex,
+	});
+	while (definition !== null) {
+		definitions.push(definition.definition);
+		nextLineIndex = definition.nextLineIndex;
+		definition = _parseLinkReferenceDefinition(lines, {
+			startLineIndex: nextLineIndex,
+		});
+	}
+	return {
+		definitions,
+		nextLineIndex,
+	};
+}
+
+function _parseLinkReferenceDefinition(
+	lines: string[],
+	options: { startLineIndex: number },
+): {
 	definition: {
 		label: string;
 		href: string;
@@ -1524,10 +1505,10 @@ function parseLinkReferenceDefinition(lines: string[]): {
 	};
 	nextLineIndex: number;
 } | null {
-	const firstLine = lines[0];
+	const firstLine = lines[options.startLineIndex];
 	if (firstLine === undefined) return null;
 
-	let nextLineIndex = 1;
+	let nextLineIndex = options.startLineIndex + 1;
 
 	let content = firstLine.trim() + "\n";
 	// A link reference definition must start with a left bracket '['
