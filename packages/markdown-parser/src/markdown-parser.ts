@@ -551,6 +551,7 @@ export class MarkdownParser {
 			}
 		}
 	}
+
 	private convertInternalBlockToPublicBlock(
 		block: BlockNode_internal,
 	): BlockNode {
@@ -616,7 +617,8 @@ export class MarkdownParser {
 					content: block.lines.join("\n"),
 				};
 			case "list": {
-				const items = block.children.map((item) => ({
+				const items: ListItemNode[] = block.children.map((item) => ({
+					type: "list-item",
 					children: item.children.map((child) =>
 						this.convertInternalBlockToPublicBlock(child),
 					),
@@ -662,6 +664,110 @@ export class MarkdownParser {
 						})),
 					},
 				};
+			}
+		}
+	}
+
+	get experimental_partialNodes(): BlockNode[] {
+		return this.root.children
+			.map((child) => this.convertInternalBlockToPartialBlock(child))
+			.filter((child) => child !== null);
+	}
+
+	private convertInternalBlockToPartialBlock(
+		block: BlockNode_internal,
+	): BlockNode | null {
+		switch (block.type) {
+			case "paragraph": {
+				if (!block.isClosed) return null;
+				return this.convertInternalBlockToPublicBlock(block);
+			}
+			case "heading": {
+				return this.convertInternalBlockToPublicBlock(block);
+			}
+			case "thematic-break": {
+				return this.convertInternalBlockToPublicBlock(block);
+			}
+			case "fenced-code-block": {
+				let content = "";
+				if (block.isClosed) {
+					content = block.lines.length > 0 ? block.lines.join("\n") + "\n" : "";
+				} else {
+					content = block.lines.length > 0 ? block.lines.join("\n") : "";
+				}
+				return {
+					type: "code-block",
+					content: content,
+					info: block.info,
+				} satisfies CodeBlockNode;
+			}
+			case "indented-code-block": {
+				let startIndex = 0;
+				let endIndex = block.lines.length - 1;
+
+				while (startIndex < endIndex) {
+					const line = block.lines[startIndex];
+					if (line === undefined) break;
+					if (!isLineEmpty(line)) break;
+					startIndex++;
+				}
+				while (endIndex > startIndex) {
+					const line = block.lines[endIndex];
+					if (line === undefined) break;
+					if (!isLineEmpty(line)) break;
+					endIndex--;
+				}
+				let content = "";
+				if (block.isClosed) {
+					content =
+						block.lines.slice(startIndex, endIndex + 1).join("\n") + "\n";
+				} else {
+					content = block.lines.slice(startIndex, endIndex + 1).join("\n");
+				}
+				return {
+					type: "code-block",
+					content: content,
+				} satisfies CodeBlockNode;
+			}
+			case "html-block": {
+				return this.convertInternalBlockToPublicBlock(block);
+			}
+			case "table": {
+				return this.convertInternalBlockToPublicBlock(block);
+			}
+			case "blockquote": {
+				return {
+					type: "blockquote",
+					children: block.children
+						.map((child) => this.convertInternalBlockToPartialBlock(child))
+						.filter((child) => child !== null),
+				} satisfies BlockquoteNode;
+			}
+			case "list": {
+				const items: ListItemNode[] = block.children.map((item) => ({
+					type: "list-item",
+					children: item.children
+						.map((child) => this.convertInternalBlockToPartialBlock(child))
+						.filter((child) => child !== null),
+				}));
+
+				if (block.kind === "ordered") {
+					return {
+						type: "list",
+						kind: "ordered",
+						start: block.start,
+						tight: block.isTight,
+						items: items,
+					} satisfies ListNode;
+				} else {
+					return {
+						type: "list",
+						kind: "unordered",
+						marker: block.marker,
+						tight: block.isTight,
+						items: items,
+					} satisfies ListNode;
+				}
 			}
 		}
 	}
@@ -2070,7 +2176,7 @@ export interface BlockquoteNode {
 export type ListNode = {
 	type: "list";
 	tight: boolean;
-	items: Array<{ children: Array<BlockNode> }>;
+	items: Array<ListItemNode>;
 } & (
 	| {
 			kind: "ordered";
@@ -2081,6 +2187,12 @@ export type ListNode = {
 			marker: string;
 	  }
 );
+
+export type ListItemNode = {
+	type: "list-item";
+	children: Array<BlockNode>;
+};
+
 export interface HtmlBlockNode {
 	type: "html-block";
 	content: string;
